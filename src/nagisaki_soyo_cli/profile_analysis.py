@@ -49,6 +49,19 @@ class AnalysisResult:
     persona_summary: str
     agent_strategy: dict[str, Any]
     prompt_profile: str
+    confidence: dict[str, float]
+    evidence: dict[str, list[str]]
+    generation_mode: str
+    model_name: str | None
+    generated_at: str
+
+
+@dataclass
+class ModelComparisonResult:
+    compared_models: list[str]
+    user_name: str
+    sample_count: int
+    results: list[AnalysisResult]
     generated_at: str
 
 
@@ -77,9 +90,26 @@ def analyze_user_language(
 
     feature_summary = _compute_feature_summary(cleaned_samples)
     user_profile_facts = _build_user_profile_facts(feature_summary)
-    persona_summary = _build_persona_summary(user_name, user_profile_facts, feature_summary, cleaned_samples, use_llm=use_llm, model=model, temperature=temperature)
-    agent_strategy = _build_agent_strategy(user_profile_facts)
-    prompt_profile = _build_prompt_profile(user_name, user_profile_facts, agent_strategy)
+    rule_agent_strategy = _build_agent_strategy(user_profile_facts)
+    rule_evidence = _build_evidence(cleaned_samples, feature_summary, user_profile_facts)
+    rule_confidence = _build_confidence(feature_summary, used_llm=False)
+    llm_bundle: dict[str, Any] | None = None
+    if use_llm:
+        llm_bundle = _build_llm_profile_bundle(
+            user_name,
+            user_profile_facts,
+            feature_summary,
+            cleaned_samples,
+            fallback_confidence=rule_confidence,
+            fallback_evidence=rule_evidence,
+            model=model,
+            temperature=temperature,
+        )
+    persona_summary = llm_bundle["persona_summary"] if llm_bundle else _build_persona_summary(user_name, user_profile_facts)
+    agent_strategy = llm_bundle["agent_strategy"] if llm_bundle else rule_agent_strategy
+    prompt_profile = llm_bundle["prompt_profile"] if llm_bundle else _build_prompt_profile(user_name, user_profile_facts, agent_strategy)
+    confidence = llm_bundle["confidence"] if llm_bundle else rule_confidence
+    evidence = llm_bundle["evidence"] if llm_bundle else rule_evidence
     source_summary = dict(sorted(Counter(sample.source for sample in cleaned_samples).items()))
 
     return AnalysisResult(
@@ -91,6 +121,39 @@ def analyze_user_language(
         persona_summary=persona_summary,
         agent_strategy=agent_strategy,
         prompt_profile=prompt_profile,
+        confidence=confidence,
+        evidence=evidence,
+        generation_mode="llm" if use_llm else "rule",
+        model_name=model if use_llm else None,
+        generated_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def compare_user_language_models(
+    user_name: str,
+    samples: list[TextSample],
+    *,
+    models: list[str],
+    temperature: float = DEFAULT_TEMPERATURE,
+) -> ModelComparisonResult:
+    compared_models = [model.strip() for model in models if model.strip()]
+    if not compared_models:
+        raise RuntimeError("At least one model is required for comparison.")
+    results = [
+        analyze_user_language(
+            user_name=user_name,
+            samples=samples,
+            use_llm=True,
+            model=model_name,
+            temperature=temperature,
+        )
+        for model_name in compared_models
+    ]
+    return ModelComparisonResult(
+        compared_models=compared_models,
+        user_name=user_name,
+        sample_count=results[0].sample_count if results else 0,
+        results=results,
         generated_at=datetime.now(timezone.utc).isoformat(),
     )
 
@@ -103,16 +166,40 @@ def save_analysis_result(result: AnalysisResult, output_path: Path | None = None
     return path
 
 
+def save_model_comparison(result: ModelComparisonResult, output_path: Path | None = None) -> Path:
+    path = output_path or _default_comparison_output_path(result.user_name)
+    payload = asdict(result)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
 def format_analysis_summary(result: AnalysisResult) -> str:
     lines = [
         f"user_name: {result.user_name}",
         f"sample_count: {result.sample_count}",
+        f"generation_mode: {result.generation_mode}",
+        f"model_name: {result.model_name or 'rule-based'}",
         f"speaking_style: {', '.join(result.user_profile_facts['language_style'])}",
         f"tone: {', '.join(result.user_profile_facts['tone'])}",
         f"emotion_pattern: {', '.join(result.user_profile_facts['emotion_pattern'])}",
         f"common_topics: {', '.join(result.user_profile_facts['common_topics']) or 'none'}",
         f"agent_reply_tone: {result.agent_strategy['reply_tone']}",
+        f"confidence_overall: {result.confidence['overall']:.2f}",
     ]
+    return "\n".join(lines)
+
+
+def format_model_comparison_summary(result: ModelComparisonResult) -> str:
+    lines = [
+        f"user_name: {result.user_name}",
+        f"sample_count: {result.sample_count}",
+        "model_results:",
+    ]
+    for item in result.results:
+        lines.append(
+            f"- {item.model_name or 'rule-based'} | confidence={item.confidence['overall']:.2f} | reply_tone={item.agent_strategy['reply_tone']}"
+        )
     return "\n".join(lines)
 
 
@@ -267,18 +354,7 @@ def _build_user_profile_facts(feature_summary: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def _build_persona_summary(
-    user_name: str,
-    user_profile_facts: dict[str, Any],
-    feature_summary: dict[str, Any],
-    samples: list[TextSample],
-    *,
-    use_llm: bool,
-    model: str,
-    temperature: float,
-) -> str:
-    if use_llm:
-        return _build_persona_summary_with_llm(user_name, user_profile_facts, feature_summary, samples, model=model, temperature=temperature)
+def _build_persona_summary(user_name: str, user_profile_facts: dict[str, Any]) -> str:
     language_style = "、".join(user_profile_facts["language_style"])
     tone = "、".join(user_profile_facts["tone"])
     emotions = "、".join(user_profile_facts["emotion_pattern"])
@@ -290,25 +366,20 @@ def _build_persona_summary(
     )
 
 
-def _build_persona_summary_with_llm(
+def _build_llm_profile_bundle(
     user_name: str,
     user_profile_facts: dict[str, Any],
     feature_summary: dict[str, Any],
     samples: list[TextSample],
     *,
+    fallback_confidence: dict[str, float],
+    fallback_evidence: dict[str, list[str]],
     model: str,
     temperature: float,
-) -> str:
+) -> dict[str, Any]:
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is required when --use-llm is enabled.")
-    client_kwargs: dict[str, object] = {
-        "api_key": OPENAI_API_KEY,
-        "model": model,
-        "temperature": temperature,
-    }
-    if OPENAI_BASE_URL:
-        client_kwargs["base_url"] = OPENAI_BASE_URL
-    client = ChatOpenAI(**client_kwargs)
+    client = _create_llm_client(model=model, temperature=temperature)
     excerpts = [sample.text for sample in samples[:8]]
     human_prompt = json.dumps(
         {
@@ -316,7 +387,17 @@ def _build_persona_summary_with_llm(
             "feature_summary": feature_summary,
             "user_profile_facts": user_profile_facts,
             "sample_excerpts": excerpts,
-            "task": "Write a concise Chinese persona summary for agent-persona reference.",
+            "task": (
+                "Return valid JSON for agent-persona reference. "
+                "The JSON must contain persona_summary, agent_strategy, and prompt_profile. "
+                "It must also contain confidence and evidence. "
+                "persona_summary should be a concise Chinese string when possible. "
+                "agent_strategy must include reply_tone, response_style, preferred_length, empathy_first, focus, avoid, and boundaries. "
+                "focus, avoid, and boundaries must be arrays of short Chinese strings. "
+                "confidence must be an object with overall, persona_summary, agent_strategy, and prompt_profile values from 0 to 1. "
+                "evidence must be an object with short Chinese evidence arrays. "
+                "prompt_profile must be a concise Chinese multiline prompt summary."
+            ),
         },
         ensure_ascii=False,
         indent=2,
@@ -327,9 +408,13 @@ def _build_persona_summary_with_llm(
             HumanMessage(content=human_prompt),
         ]
     )
-    if isinstance(response.content, str) and response.content.strip():
-        return response.content.strip()
-    raise RuntimeError("The LLM returned an empty persona summary.")
+    content = _coerce_message_text(response.content)
+    payload = _parse_llm_json(content)
+    return _validate_llm_profile_bundle(
+        payload,
+        fallback_confidence=fallback_confidence,
+        fallback_evidence=fallback_evidence,
+    )
 
 
 def _build_agent_strategy(user_profile_facts: dict[str, Any]) -> dict[str, Any]:
@@ -357,11 +442,18 @@ def _build_agent_strategy(user_profile_facts: dict[str, Any]) -> dict[str, Any]:
     avoid = ["命令式表达", "过强判断", "把推测说成事实"]
     avoid.extend(sensitivity_points)
 
+    boundaries = ["不要替用户定义真实人格", "避免把推测当成事实"]
+    if "不适合过强结论" in sensitivity_points:
+        boundaries.append("避免过早下结论")
+
     return {
         "reply_tone": reply_tone,
         "response_style": response_style,
+        "preferred_length": "medium" if "细致" in user_profile_facts["language_style"] else "short",
+        "empathy_first": "有安抚倾向" in emotion_pattern,
         "focus": _dedupe_preserve_order(focus),
         "avoid": _dedupe_preserve_order(avoid),
+        "boundaries": _dedupe_preserve_order(boundaries),
     }
 
 
@@ -377,7 +469,10 @@ def _build_prompt_profile(user_name: str, user_profile_facts: dict[str, Any], ag
             f"敏感点：{'、'.join(user_profile_facts['sensitivity_points']) or '未识别'}",
             f"建议回复语气：{agent_strategy['reply_tone']}",
             f"建议回复方式：{agent_strategy['response_style']}",
+            f"建议回复长度：{agent_strategy['preferred_length']}",
+            f"先共情：{'是' if agent_strategy['empathy_first'] else '否'}",
             f"应避免：{'、'.join(agent_strategy['avoid'])}",
+            f"边界规则：{'、'.join(agent_strategy['boundaries'])}",
         ]
     )
 
@@ -408,3 +503,208 @@ def _default_output_path(user_name: str) -> Path:
     safe_name = re.sub(r"[^A-Za-z0-9_\u4e00-\u9fff-]+", "-", user_name).strip("-") or "user"
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return PROFILE_RUNS_DIR / f"{timestamp}-{safe_name}.json"
+
+
+def _default_comparison_output_path(user_name: str) -> Path:
+    safe_name = re.sub(r"[^A-Za-z0-9_\u4e00-\u9fff-]+", "-", user_name).strip("-") or "user"
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return PROFILE_RUNS_DIR / f"{timestamp}-{safe_name}-model-compare.json"
+
+
+def _create_llm_client(*, model: str, temperature: float) -> ChatOpenAI:
+    client_kwargs: dict[str, object] = {
+        "api_key": OPENAI_API_KEY,
+        "model": model,
+        "temperature": temperature,
+    }
+    if OPENAI_BASE_URL:
+        client_kwargs["base_url"] = OPENAI_BASE_URL
+    return ChatOpenAI(**client_kwargs)
+
+
+def _coerce_message_text(content: object) -> str:
+    if isinstance(content, str):
+        text = content.strip()
+        if text:
+            return text
+        raise RuntimeError("The LLM returned an empty message.")
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                maybe_text = block.strip()
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                maybe_text = block["text"].strip()
+            else:
+                raise RuntimeError("The LLM returned an unsupported content block.")
+            if maybe_text:
+                parts.append(maybe_text)
+        text = "\n".join(parts).strip()
+        if text:
+            return text
+        raise RuntimeError("The LLM returned an empty message.")
+    raise RuntimeError("The LLM returned an unsupported content type.")
+
+
+def _parse_llm_json(content: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", content, flags=re.DOTALL)
+        if not match:
+            raise RuntimeError("The LLM response was not valid JSON.")
+        try:
+            payload = json.loads(match.group(0))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("The LLM response did not contain a valid JSON object.") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("The LLM response JSON must be an object.")
+    return payload
+
+
+def _validate_llm_profile_bundle(
+    payload: dict[str, Any],
+    *,
+    fallback_confidence: dict[str, float],
+    fallback_evidence: dict[str, list[str]],
+) -> dict[str, Any]:
+    persona_summary = _normalize_llm_persona_summary(payload.get("persona_summary"))
+    prompt_profile = payload.get("prompt_profile")
+    agent_strategy = payload.get("agent_strategy")
+    confidence = _normalize_confidence(payload.get("confidence"), fallback_confidence)
+    evidence = _normalize_evidence(payload.get("evidence"), fallback_evidence)
+
+    if not persona_summary:
+        raise RuntimeError("The LLM response is missing a non-empty persona_summary.")
+    if not isinstance(prompt_profile, str) or not prompt_profile.strip():
+        raise RuntimeError("The LLM response is missing a non-empty prompt_profile.")
+    if not isinstance(agent_strategy, dict):
+        raise RuntimeError("The LLM response is missing agent_strategy.")
+
+    reply_tone = agent_strategy.get("reply_tone")
+    response_style = agent_strategy.get("response_style")
+    preferred_length = agent_strategy.get("preferred_length")
+    empathy_first = agent_strategy.get("empathy_first")
+    focus = agent_strategy.get("focus")
+    avoid = agent_strategy.get("avoid")
+    boundaries = agent_strategy.get("boundaries")
+
+    if not isinstance(reply_tone, str) or not reply_tone.strip():
+        raise RuntimeError("The LLM response agent_strategy.reply_tone must be a non-empty string.")
+    if not isinstance(response_style, str) or not response_style.strip():
+        raise RuntimeError("The LLM response agent_strategy.response_style must be a non-empty string.")
+    if preferred_length not in {"short", "medium", "long"}:
+        raise RuntimeError("The LLM response agent_strategy.preferred_length must be one of short, medium, or long.")
+    if not isinstance(empathy_first, bool):
+        raise RuntimeError("The LLM response agent_strategy.empathy_first must be a boolean.")
+    if not isinstance(focus, list) or not focus or not all(isinstance(item, str) and item.strip() for item in focus):
+        raise RuntimeError("The LLM response agent_strategy.focus must be a non-empty array of strings.")
+    if not isinstance(avoid, list) or not avoid or not all(isinstance(item, str) and item.strip() for item in avoid):
+        raise RuntimeError("The LLM response agent_strategy.avoid must be a non-empty array of strings.")
+    if not isinstance(boundaries, list) or not boundaries or not all(isinstance(item, str) and item.strip() for item in boundaries):
+        raise RuntimeError("The LLM response agent_strategy.boundaries must be a non-empty array of strings.")
+
+    return {
+        "persona_summary": persona_summary,
+        "prompt_profile": prompt_profile.strip(),
+        "confidence": confidence,
+        "evidence": evidence,
+        "agent_strategy": {
+            "reply_tone": reply_tone.strip(),
+            "response_style": response_style.strip(),
+            "preferred_length": preferred_length,
+            "empathy_first": empathy_first,
+            "focus": _dedupe_preserve_order([item.strip() for item in focus]),
+            "avoid": _dedupe_preserve_order([item.strip() for item in avoid]),
+            "boundaries": _dedupe_preserve_order([item.strip() for item in boundaries]),
+        },
+    }
+
+
+def _normalize_llm_persona_summary(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        language_style = _join_summary_field(value.get("language_style"))
+        tone = _join_summary_field(value.get("tone"))
+        emotion_pattern = _join_summary_field(value.get("emotion_pattern"))
+        common_topics = _join_summary_field(value.get("common_topics"))
+        interaction_preferences = _join_summary_field(value.get("interaction_preferences"))
+        parts = []
+        if language_style:
+            parts.append(f"文本整体呈现 {language_style} 的表达风格")
+        if tone:
+            parts.append(f"语气偏 {tone}")
+        if emotion_pattern:
+            parts.append(f"情绪模式以 {emotion_pattern} 为主")
+        if common_topics:
+            parts.append(f"常见主题集中在 {common_topics}")
+        if interaction_preferences:
+            parts.append(f"互动上更接近 {interaction_preferences}")
+        return "，".join(parts) + "。" if parts else ""
+    return ""
+
+
+def _join_summary_field(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        items = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+        return "、".join(items)
+    return ""
+
+
+def _build_confidence(feature_summary: dict[str, Any], *, used_llm: bool) -> dict[str, float]:
+    base = 0.78 if used_llm else 0.64
+    source_bonus = min(len(feature_summary["source_count"]) * 0.03, 0.09)
+    topic_bonus = min(len(feature_summary["top_topics"]) * 0.02, 0.08)
+    overall = min(base + source_bonus + topic_bonus, 0.95)
+    return {
+        "overall": round(overall, 2),
+        "persona_summary": round(max(overall - 0.02, 0.0), 2),
+        "agent_strategy": round(max(overall - 0.03, 0.0), 2),
+        "prompt_profile": round(max(overall - 0.04, 0.0), 2),
+    }
+
+
+def _build_evidence(
+    samples: list[TextSample],
+    feature_summary: dict[str, Any],
+    user_profile_facts: dict[str, Any],
+) -> dict[str, list[str]]:
+    sample_excerpts = [sample.text[:80] for sample in samples[:3] if sample.text]
+    token_evidence = user_profile_facts["evidence_keywords"][:5]
+    return {
+        "language_style": [f"高频词: {'、'.join(token_evidence)}"] if token_evidence else [],
+        "tone": [f"礼貌度={feature_summary['polite_density']}", f"缓和词密度={feature_summary['softener_density']}"],
+        "emotion_pattern": [f"正向密度={feature_summary['positive_density']}", f"负向密度={feature_summary['negative_density']}"],
+        "topics": [f"主题: {'、'.join(user_profile_facts['common_topics'])}"] if user_profile_facts["common_topics"] else [],
+        "interaction_preferences": sample_excerpts,
+    }
+
+
+def _normalize_confidence(value: object, fallback: dict[str, float]) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return fallback
+    normalized: dict[str, float] = {}
+    for key in ("overall", "persona_summary", "agent_strategy", "prompt_profile"):
+        item = value.get(key)
+        if isinstance(item, (int, float)):
+            normalized[key] = round(min(max(float(item), 0.0), 1.0), 2)
+        else:
+            normalized[key] = fallback[key]
+    return normalized
+
+
+def _normalize_evidence(value: object, fallback: dict[str, list[str]]) -> dict[str, list[str]]:
+    if not isinstance(value, dict):
+        return fallback
+    normalized: dict[str, list[str]] = {}
+    for key, default_items in fallback.items():
+        item = value.get(key)
+        if isinstance(item, list):
+            cleaned = [entry.strip() for entry in item if isinstance(entry, str) and entry.strip()]
+            normalized[key] = cleaned or default_items
+        else:
+            normalized[key] = default_items
+    return normalized

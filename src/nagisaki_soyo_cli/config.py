@@ -23,6 +23,10 @@ MYSQL_USER = os.getenv("MYSQL_USER", "")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "xhs_crawler")
 MYSQL_BIN = os.getenv("MYSQL_BIN", "mysql")
+PROFILE_MYSQL_DATABASE = os.getenv("PROFILE_MYSQL_DATABASE", "nagisaki_soyo_digital_waifu")
+PROFILE_MYSQL_USER_TABLE = os.getenv("PROFILE_MYSQL_USER_TABLE", "user_profiles")
+PROFILE_MYSQL_PERSONA_TABLE = os.getenv("PROFILE_MYSQL_PERSONA_TABLE", "persona_summaries")
+LLM_HEALTH_TABLE = os.getenv("LLM_HEALTH_TABLE", "llm_health")
 
 
 def _move_repo_data(src: Path, dst: Path) -> None:

@@ -22,6 +22,9 @@ uv run nagisaki-soyo-cli --model gpt-4.1-mini
 uv run nagisaki-soyo-cli --prompt "Say hello in a calm tone"
 uv run nagisaki-soyo-cli profile-analyze --user-name "长崎素世" --input-file ./sample-user-texts.json
 uv run nagisaki-soyo-cli profile-analyze-mysql --user-id 678059f0000000000801f777
+uv run nagisaki-soyo-cli profile-analyze-mysql --user-id 678059f0000000000801f777 --use-llm --persist-mysql
+uv run nagisaki-soyo-cli profile-compare-mysql --user-id 678059f0000000000801f777 --models gpt-4.1-mini,gpt-4.1-mini
+uv run nagisaki-soyo-cli llm-health-probe --models gpt-4.1,gpt-5
 ```
 
 ## Chat commands
@@ -49,7 +52,7 @@ The repository includes a minimal scaffold for:
 1. loading user texts from `.json`, `.jsonl`, or `.txt`
 2. computing lightweight language-style features
 3. generating a persona summary
-4. producing `agent_strategy` and `prompt_profile`
+4. producing `agent_strategy`, `prompt_profile`, `confidence`, and `evidence`
 5. saving the result to `data/profile_runs/`
 
 Run it with:
@@ -60,7 +63,7 @@ uv run nagisaki-soyo-cli profile-analyze \
   --input-file ./sample-user-texts.json
 ```
 
-Use `--use-llm` to generate the persona summary through the configured OpenAI-compatible API.
+Use `--use-llm` to generate `persona_summary`, `agent_strategy`, `prompt_profile`, `confidence`, and `evidence` through the configured OpenAI-compatible API. The LLM path expects valid JSON output and raises an explicit error if the response shape is invalid.
 
 To analyze a user directly from the local `xhs_crawler` MySQL database, set these environment variables in `.env`:
 
@@ -78,6 +81,29 @@ uv run nagisaki-soyo-cli profile-analyze-mysql \
 ```
 
 The MySQL-backed scaffold loads `users.bio`, `notes.title`, `notes.desc`, matching `tags.tag`, and any matching `comments.content`, then writes the profile result to `data/profile_runs/`.
+
+Optional persistence target variables:
+
+- `PROFILE_MYSQL_DATABASE`
+- `PROFILE_MYSQL_USER_TABLE`
+- `PROFILE_MYSQL_PERSONA_TABLE`
+
+To persist the generated profile bundle into the split portrait tables:
+
+```bash
+uv run nagisaki-soyo-cli profile-analyze-mysql \
+  --user-id 678059f0000000000801f777 \
+  --use-llm \
+  --persist-mysql
+```
+
+To compare one or more models against the same MySQL user input:
+
+```bash
+uv run nagisaki-soyo-cli profile-compare-mysql \
+  --user-id 678059f0000000000801f777 \
+  --models gpt-4.1-mini,gpt-4.1-mini
+```
 
 Supported JSON input formats:
 
@@ -122,7 +148,30 @@ For Xiaohongshu user characterization, the repository also includes a dedicated 
 mysql -u <user> -p < sql/mysql_user_profiles.sql
 ```
 
-The `xhs_user_profiles` table is designed around `xhs_crawler`-style `users`, `notes`, `comments`, and tag-derived signals so you can persist structured user portraits for downstream analysis.
+The profile schema now uses two tables:
+
+1. `user_profiles` stores platform user metadata synchronized from `xhs_crawler`
+2. `persona_summaries` stores the generated `persona_summary`, `agent_strategy`, `prompt_profile`, confidence, evidence, and other analysis artifacts
+
+To store LLM availability and probe results, apply:
+
+```bash
+mysql -u <user> -p < sql/mysql_llm_health.sql
+```
+
+The `llm_health` table is intended for recording model call health such as GPT-4 and GPT-5 availability, response previews, and gateway error details.
+
+To batch probe GPT-4/GPT-5 models and automatically persist the result into `llm_health`:
+
+```bash
+uv run nagisaki-soyo-cli llm-health-probe
+```
+
+To probe a smaller custom set:
+
+```bash
+uv run nagisaki-soyo-cli llm-health-probe --models gpt-4.1,gpt-5
+```
 
 ## Data layout
 

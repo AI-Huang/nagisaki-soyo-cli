@@ -5,7 +5,14 @@ import os
 import subprocess
 from dataclasses import dataclass
 
-from .config import MYSQL_BIN, MYSQL_DATABASE, MYSQL_HOST, MYSQL_PASSWORD, MYSQL_PORT, MYSQL_USER
+from .config import (
+    MYSQL_BIN,
+    MYSQL_DATABASE,
+    MYSQL_HOST,
+    MYSQL_PASSWORD,
+    MYSQL_PORT,
+    MYSQL_USER,
+)
 from .profile_analysis import TextSample
 
 
@@ -14,6 +21,11 @@ class MysqlProfileSource:
     user_id: str
     user_name: str
     matched_author_name: str | None
+    user_record: dict[str, str]
+    note_count: int
+    comment_count: int
+    avg_note_length: int | None
+    last_note_at: str | None
     samples: list[TextSample]
 
 
@@ -31,14 +43,24 @@ def load_mysql_profile_source(
     resolved_user_id = user_record["user_id"]
     resolved_user_name = user_record["user_name"]
     matched_author_name = user_record["matched_author_name"]
+    note_metrics = _load_note_metrics(resolved_user_id)
+    comment_count = _load_comment_count(resolved_user_name, matched_author_name)
 
     samples: list[TextSample] = []
     bio = user_record["bio"]
     if bio:
-        samples.append(TextSample(text=bio, source="mysql-user-bio", created_at=user_record["crawled_at"]))
+        samples.append(
+            TextSample(
+                text=bio, source="mysql-user-bio", created_at=user_record["crawled_at"]
+            )
+        )
 
     samples.extend(_load_note_samples(resolved_user_id, max_notes=max_notes))
-    samples.extend(_load_comment_samples(resolved_user_name, matched_author_name, max_comments=max_comments))
+    samples.extend(
+        _load_comment_samples(
+            resolved_user_name, matched_author_name, max_comments=max_comments
+        )
+    )
 
     if not samples:
         raise RuntimeError("No text samples were found for the requested MySQL user.")
@@ -47,6 +69,11 @@ def load_mysql_profile_source(
         user_id=resolved_user_id,
         user_name=resolved_user_name,
         matched_author_name=matched_author_name,
+        user_record=user_record,
+        note_count=note_metrics["note_count"],
+        comment_count=comment_count,
+        avg_note_length=note_metrics["avg_note_length"],
+        last_note_at=note_metrics["last_note_at"],
         samples=samples,
     )
 
@@ -57,7 +84,9 @@ def _load_user_record(*, user_name: str | None, user_id: str | None) -> dict[str
         where_clauses.append(f"u.user_id = {_sql_quote(user_id)}")
     if user_name:
         quoted_name = _sql_quote(user_name)
-        where_clauses.append(f"(u.nickname = {quoted_name} OR a.author_name = {quoted_name})")
+        where_clauses.append(
+            f"(u.nickname = {quoted_name} OR a.author_name = {quoted_name})"
+        )
     if not where_clauses:
         raise RuntimeError("Either user_name or user_id is required.")
 
@@ -67,13 +96,18 @@ SELECT
     HEX(COALESCE(NULLIF(u.nickname, ''), a.author_name, u.user_id)),
     HEX(COALESCE(a.author_name, '')),
     HEX(COALESCE(u.bio, '')),
+    HEX(COALESCE(u.access_url, '')),
+    HEX(COALESCE(u.ip_location, '')),
+    HEX(COALESCE(u.follows, '')),
+    HEX(COALESCE(u.fans, '')),
+    HEX(COALESCE(u.likes, '')),
     HEX(CAST(u.crawled_at AS CHAR))
 FROM users AS u
 LEFT JOIN authors AS a ON a.author_id = u.user_id
 WHERE {" OR ".join(where_clauses)}
 LIMIT 1
 """
-    rows = _run_mysql_tsv(query, expected_columns=5)
+    rows = _run_mysql_tsv(query, expected_columns=10)
     if not rows:
         raise RuntimeError("No matching user was found in xhs_crawler.")
     row = rows[0]
@@ -82,7 +116,12 @@ LIMIT 1
         "user_name": _decode_hex(row[1]),
         "matched_author_name": _decode_hex(row[2]),
         "bio": _decode_hex(row[3]),
-        "crawled_at": _decode_hex(row[4]),
+        "access_url": _decode_hex(row[4]),
+        "ip_location": _decode_hex(row[5]),
+        "follows": _decode_hex(row[6]),
+        "fans": _decode_hex(row[7]),
+        "likes": _decode_hex(row[8]),
+        "crawled_at": _decode_hex(row[9]),
     }
 
 
@@ -127,11 +166,19 @@ LIMIT {max_notes}
                 )
             )
         if not note_text_parts and not tags:
-            samples.append(TextSample(text=note_id, source="mysql-note-id", created_at=publish_time or None))
+            samples.append(
+                TextSample(
+                    text=note_id,
+                    source="mysql-note-id",
+                    created_at=publish_time or None,
+                )
+            )
     return samples
 
 
-def _load_comment_samples(user_name: str, matched_author_name: str | None, *, max_comments: int) -> list[TextSample]:
+def _load_comment_samples(
+    user_name: str, matched_author_name: str | None, *, max_comments: int
+) -> list[TextSample]:
     names = [name for name in {user_name, matched_author_name or ""} if name]
     if not names:
         return []
@@ -151,8 +198,45 @@ LIMIT {max_comments}
         content = _decode_hex(content_hex)
         crawled_at = _decode_hex(crawled_at_hex)
         if content:
-            samples.append(TextSample(text=content, source="mysql-comment", created_at=crawled_at or None))
+            samples.append(
+                TextSample(
+                    text=content, source="mysql-comment", created_at=crawled_at or None
+                )
+            )
     return samples
+
+
+def _load_note_metrics(user_id: str) -> dict[str, int | str | None]:
+    query = f"""
+SELECT
+    COUNT(*) AS note_count,
+    CAST(ROUND(AVG(CHAR_LENGTH(CONCAT(COALESCE(n.title, ''), COALESCE(n.`desc`, ''))))) AS CHAR) AS avg_note_length,
+    HEX(COALESCE(MAX(n.publish_time), '')) AS last_note_at
+FROM notes AS n
+WHERE n.author_id = {_sql_quote(user_id)}
+"""
+    rows = _run_mysql_tsv(query, expected_columns=3)
+    note_count_str, avg_length_str, last_note_hex = rows[0] if rows else ["0", "", ""]
+    return {
+        "note_count": int(note_count_str or "0"),
+        "avg_note_length": int(avg_length_str) if avg_length_str else None,
+        "last_note_at": _decode_hex(last_note_hex) or None,
+    }
+
+
+def _load_comment_count(user_name: str, matched_author_name: str | None) -> int:
+    names = [name for name in {user_name, matched_author_name or ""} if name]
+    if not names:
+        return 0
+    in_list = ", ".join(_sql_quote(name) for name in names)
+    query = f"""
+SELECT
+    COUNT(*)
+FROM comments AS c
+WHERE c.author_name IN ({in_list})
+"""
+    rows = _run_mysql_tsv(query, expected_columns=1)
+    return int(rows[0][0]) if rows else 0
 
 
 def _run_mysql_tsv(query: str, *, expected_columns: int) -> list[list[str]]:
@@ -190,7 +274,9 @@ def _run_mysql_tsv(query: str, *, expected_columns: int) -> list[list[str]]:
             continue
         columns = line.split("\t")
         if len(columns) != expected_columns:
-            raise RuntimeError(f"Unexpected MySQL result shape. Expected {expected_columns} columns, got {len(columns)}.")
+            raise RuntimeError(
+                f"Unexpected MySQL result shape. Expected {expected_columns} columns, got {len(columns)}."
+            )
         rows.append(columns)
     return rows
 
