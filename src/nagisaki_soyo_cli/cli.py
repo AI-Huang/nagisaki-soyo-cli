@@ -6,12 +6,14 @@ from pathlib import Path
 
 from .chatbot import ChatSession, OPENAI_ERRORS
 from .config import DEFAULT_MODEL, DEFAULT_TEMPERATURE
+from .demo_persona_chat import build_demo_system_prompt, format_demo_chat_banner
 from .llm_health import (
     DEFAULT_LLM_HEALTH_MODELS,
     format_llm_health_summary,
     persist_llm_health_records,
     run_llm_health_probe,
 )
+from .mysql_persona_source import load_persona_mirror_source
 from .mysql_profile_source import load_mysql_profile_source
 from .mysql_profile_store import persist_analysis_result_to_mysql
 from .profile_analysis import (
@@ -187,6 +189,30 @@ def build_llm_health_probe_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_demo_chat_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="nagisaki-soyo-cli demo-chat",
+        description="Chat with a demo bot driven by the latest persisted persona summary.",
+    )
+    parser.add_argument("--user-name", help="Display name to match against user_profiles.nickname.")
+    parser.add_argument("--user-id", help="Exact user identifier from user_profiles.source_user_id.")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="Model name for the OpenAI-compatible API.")
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=DEFAULT_TEMPERATURE,
+        help="Sampling temperature for responses.",
+    )
+    parser.add_argument("--prompt", help="Send one message and print one reply without entering the REPL.")
+    parser.add_argument(
+        "--save-on-exit",
+        action="store_true",
+        help="Save the conversation transcript when leaving the chat.",
+    )
+    parser.add_argument("--no-banner", action="store_true", help="Do not print the startup banner.")
+    return parser
+
+
 def load_system_prompt(path: Path | None) -> str:
     if path is None:
         return DEFAULT_SYSTEM_PROMPT
@@ -329,6 +355,34 @@ def main() -> None:
         print(format_llm_health_summary(result))
         if not args.skip_persist:
             print("persisted_mysql: yes")
+        return
+    if argv and argv[0] == "demo-chat":
+        parser = build_demo_chat_parser()
+        args = parser.parse_args(argv[1:])
+        if not args.user_name and not args.user_id:
+            raise SystemExit("demo-chat requires --user-name or --user-id.")
+        persona_source = load_persona_mirror_source(
+            user_name=args.user_name,
+            user_id=args.user_id,
+        )
+        session = ChatSession(
+            model=args.model,
+            temperature=args.temperature,
+            system_prompt=build_demo_system_prompt(persona_source),
+        )
+        if not args.no_banner:
+            print(format_demo_chat_banner(persona_source))
+        if args.prompt:
+            try:
+                reply = session.reply(args.prompt)
+            except OPENAI_ERRORS as exc:
+                raise SystemExit(f"Model request failed: {exc}") from exc
+            print(reply)
+            if args.save_on_exit:
+                path = session.save_transcript()
+                print(f"Saved transcript to {path}.")
+            return
+        run_repl(session, save_on_exit=args.save_on_exit)
         return
 
     parser = build_parser()

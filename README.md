@@ -20,10 +20,12 @@ cp .env.example .env
 uv run nagisaki-soyo-cli
 uv run nagisaki-soyo-cli --model gpt-4.1-mini
 uv run nagisaki-soyo-cli --prompt "Say hello in a calm tone"
+uv run nagisaki-soyo-cli demo-chat --user-id <YOUR_USER_ID>
+uv run nagisaki-soyo-cli demo-chat --user-id <YOUR_USER_ID> --prompt "请用一句话介绍你的说话风格"
 uv run nagisaki-soyo-cli profile-analyze --user-name "长崎素世" --input-file ./sample-user-texts.json
-uv run nagisaki-soyo-cli profile-analyze-mysql --user-id 678059f0000000000801f777
-uv run nagisaki-soyo-cli profile-analyze-mysql --user-id 678059f0000000000801f777 --use-llm --persist-mysql
-uv run nagisaki-soyo-cli profile-compare-mysql --user-id 678059f0000000000801f777 --models gpt-4.1-mini,gpt-4.1-mini
+uv run nagisaki-soyo-cli profile-analyze-mysql --user-id <YOUR_USER_ID>
+uv run nagisaki-soyo-cli profile-analyze-mysql --user-id <YOUR_USER_ID> --use-llm --persist-mysql
+uv run nagisaki-soyo-cli profile-compare-mysql --user-id <YOUR_USER_ID> --models gpt-4.1-mini,gpt-4.1-mini
 uv run nagisaki-soyo-cli llm-health-probe --models gpt-4.1,gpt-5
 ```
 
@@ -44,6 +46,25 @@ Set these in `.env` or your shell:
 - `SOYO_TEMPERATURE` optional default temperature override
 
 The chat model is wired through `langchain-openai` and accepts the same OpenAI-compatible API settings.
+
+## Demo persona chatbot
+
+Once a user's profile has been persisted into `user_profiles` and `persona_summaries`, you can spin up a demo chatbot that uses that stored persona strategy as its system prompt source:
+
+```bash
+uv run nagisaki-soyo-cli demo-chat \
+  --user-id <YOUR_USER_ID>
+```
+
+Or send one message in one-shot mode:
+
+```bash
+uv run nagisaki-soyo-cli demo-chat \
+  --user-id <YOUR_USER_ID> \
+  --prompt "请用一句话介绍你的说话风格"
+```
+
+The demo chat flow loads the latest persisted `persona_summary`, `agent_strategy`, `prompt_profile`, and confidence data, then builds a mirrored system prompt without claiming to be the real user.
 
 ## Agent profile scaffold
 
@@ -77,7 +98,7 @@ Then run:
 
 ```bash
 uv run nagisaki-soyo-cli profile-analyze-mysql \
-  --user-id 678059f0000000000801f777
+  --user-id <YOUR_USER_ID>
 ```
 
 The MySQL-backed scaffold loads `users.bio`, `notes.title`, `notes.desc`, matching `tags.tag`, and any matching `comments.content`, then writes the profile result to `data/profile_runs/`.
@@ -92,7 +113,7 @@ To persist the generated profile bundle into the split portrait tables:
 
 ```bash
 uv run nagisaki-soyo-cli profile-analyze-mysql \
-  --user-id 678059f0000000000801f777 \
+  --user-id <YOUR_USER_ID> \
   --use-llm \
   --persist-mysql
 ```
@@ -101,7 +122,7 @@ To compare one or more models against the same MySQL user input:
 
 ```bash
 uv run nagisaki-soyo-cli profile-compare-mysql \
-  --user-id 678059f0000000000801f777 \
+  --user-id <YOUR_USER_ID> \
   --models gpt-4.1-mini,gpt-4.1-mini
 ```
 
