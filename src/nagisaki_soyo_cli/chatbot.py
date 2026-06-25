@@ -9,7 +9,13 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 from openai import APIConnectionError, APIError, AuthenticationError, RateLimitError
 
-from .config import DEFAULT_MODEL, DEFAULT_TEMPERATURE, OPENAI_API_KEY, OPENAI_BASE_URL, TRANSCRIPTS_DIR
+from .config import (
+    DEFAULT_MODEL,
+    DEFAULT_TEMPERATURE,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
+    TRANSCRIPTS_DIR,
+)
 from .prompts import DEFAULT_SYSTEM_PROMPT
 
 
@@ -23,7 +29,12 @@ class ChatSession:
 
     def __post_init__(self) -> None:
         if not OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY is required. Set it in your environment or .env file.")
+            raise RuntimeError(
+                "OPENAI_API_KEY is required. Set it in your environment or .env file."
+            )
+        self.client = self._build_client()
+
+    def _build_client(self) -> ChatOpenAI:
         client_kwargs: dict[str, object] = {
             "api_key": OPENAI_API_KEY,
             "model": self.model,
@@ -31,7 +42,14 @@ class ChatSession:
         }
         if OPENAI_BASE_URL:
             client_kwargs["base_url"] = OPENAI_BASE_URL
-        self.client = ChatOpenAI(**client_kwargs)
+        return ChatOpenAI(**client_kwargs)
+
+    def set_model(self, model: str) -> None:
+        model = model.strip()
+        if not model:
+            raise ValueError("Model name must not be empty.")
+        self.model = model
+        self.client = self._build_client()
 
     def reply(self, user_text: str) -> str:
         self.messages.append({"role": "user", "content": user_text})
@@ -70,10 +88,14 @@ class ChatSession:
                 elif isinstance(block, dict):
                     maybe_text = block.get("text")
                     if not isinstance(maybe_text, str):
-                        raise RuntimeError("The model returned a non-text content block.")
+                        raise RuntimeError(
+                            "The model returned a non-text content block."
+                        )
                     text = maybe_text.strip()
                 else:
-                    raise RuntimeError("The model returned an unsupported content block.")
+                    raise RuntimeError(
+                        "The model returned an unsupported content block."
+                    )
                 if text:
                     parts.append(text)
             return "\n".join(parts).strip()
@@ -88,7 +110,9 @@ class ChatSession:
             "system_prompt": self.system_prompt,
             "messages": self.messages,
         }
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         return path
 
 

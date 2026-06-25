@@ -10,6 +10,7 @@ from .demo_persona_chat import build_demo_system_prompt, format_demo_chat_banner
 from .llm_health import (
     DEFAULT_LLM_HEALTH_MODELS,
     format_llm_health_summary,
+    list_available_chat_models,
     persist_llm_health_records,
     run_llm_health_probe,
 )
@@ -33,7 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="nagisaki-soyo-cli",
         description="LangChain-based command-line chatbot with a gentle Soyo persona.",
     )
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Model name for the OpenAI-compatible API.")
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help="Model name for the OpenAI-compatible API.",
+    )
     parser.add_argument(
         "--temperature",
         type=float,
@@ -45,13 +50,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Optional file that replaces the built-in system prompt.",
     )
-    parser.add_argument("--prompt", help="Send one message and print one reply without entering the REPL.")
+    parser.add_argument(
+        "--prompt",
+        help="Send one message and print one reply without entering the REPL.",
+    )
     parser.add_argument(
         "--save-on-exit",
         action="store_true",
         help="Save the conversation transcript when leaving the chat.",
     )
-    parser.add_argument("--no-banner", action="store_true", help="Do not print the startup banner.")
+    parser.add_argument(
+        "--no-banner", action="store_true", help="Do not print the startup banner."
+    )
     return parser
 
 
@@ -60,7 +70,9 @@ def build_profile_analyze_parser() -> argparse.ArgumentParser:
         prog="nagisaki-soyo-cli profile-analyze",
         description="Analyze user texts and build an agent-persona reference scaffold.",
     )
-    parser.add_argument("--user-name", required=True, help="Display name for the analyzed user.")
+    parser.add_argument(
+        "--user-name", required=True, help="Display name for the analyzed user."
+    )
     parser.add_argument(
         "--input-file",
         type=Path,
@@ -77,7 +89,11 @@ def build_profile_analyze_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use the configured OpenAI-compatible LLM to generate the persona summary.",
     )
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Model name for optional LLM summarization.")
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help="Model name for optional LLM summarization.",
+    )
     parser.add_argument(
         "--temperature",
         type=float,
@@ -92,8 +108,13 @@ def build_profile_analyze_mysql_parser() -> argparse.ArgumentParser:
         prog="nagisaki-soyo-cli profile-analyze-mysql",
         description="Analyze a user's texts directly from the local xhs_crawler MySQL database.",
     )
-    parser.add_argument("--user-name", help="Display name to match against users.nickname or authors.author_name.")
-    parser.add_argument("--user-id", help="Exact user identifier from xhs_crawler.users.")
+    parser.add_argument(
+        "--user-name",
+        help="Display name to match against users.nickname or authors.author_name.",
+    )
+    parser.add_argument(
+        "--user-id", help="Exact user identifier from xhs_crawler.users."
+    )
     parser.add_argument(
         "--max-notes",
         type=int,
@@ -121,7 +142,11 @@ def build_profile_analyze_mysql_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Persist the generated profile bundle into the target MySQL user_profiles and persona_summaries tables.",
     )
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Model name for optional LLM summarization.")
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help="Model name for optional LLM summarization.",
+    )
     parser.add_argument(
         "--temperature",
         type=float,
@@ -136,16 +161,35 @@ def build_profile_compare_mysql_parser() -> argparse.ArgumentParser:
         prog="nagisaki-soyo-cli profile-compare-mysql",
         description="Compare one or more LLM models against the same xhs_crawler user profile input.",
     )
-    parser.add_argument("--user-name", help="Display name to match against users.nickname or authors.author_name.")
-    parser.add_argument("--user-id", help="Exact user identifier from xhs_crawler.users.")
+    parser.add_argument(
+        "--user-name",
+        help="Display name to match against users.nickname or authors.author_name.",
+    )
+    parser.add_argument(
+        "--user-id", help="Exact user identifier from xhs_crawler.users."
+    )
     parser.add_argument(
         "--models",
         required=True,
         help="Comma-separated list of one or more model names to compare.",
     )
-    parser.add_argument("--output-file", type=Path, help="Optional output JSON path for comparison results.")
-    parser.add_argument("--max-notes", type=int, default=50, help="Maximum number of notes to load from MySQL.")
-    parser.add_argument("--max-comments", type=int, default=50, help="Maximum number of comments to load from MySQL.")
+    parser.add_argument(
+        "--output-file",
+        type=Path,
+        help="Optional output JSON path for comparison results.",
+    )
+    parser.add_argument(
+        "--max-notes",
+        type=int,
+        default=50,
+        help="Maximum number of notes to load from MySQL.",
+    )
+    parser.add_argument(
+        "--max-comments",
+        type=int,
+        default=50,
+        help="Maximum number of comments to load from MySQL.",
+    )
     parser.add_argument(
         "--temperature",
         type=float,
@@ -194,22 +238,40 @@ def build_demo_chat_parser() -> argparse.ArgumentParser:
         prog="nagisaki-soyo-cli demo-chat",
         description="Chat with a demo bot driven by the latest persisted persona summary.",
     )
-    parser.add_argument("--user-name", help="Display name to match against user_profiles.nickname.")
-    parser.add_argument("--user-id", help="Exact user identifier from user_profiles.source_user_id.")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Model name for the OpenAI-compatible API.")
+    parser.add_argument(
+        "--user-name", help="Display name to match against user_profiles.nickname."
+    )
+    parser.add_argument(
+        "--user-id", help="Exact user identifier from user_profiles.source_user_id."
+    )
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help="Model name for the OpenAI-compatible API.",
+    )
+    parser.add_argument(
+        "--no-select-model",
+        action="store_true",
+        help="Skip the interactive model picker shown before the chat starts.",
+    )
     parser.add_argument(
         "--temperature",
         type=float,
         default=DEFAULT_TEMPERATURE,
         help="Sampling temperature for responses.",
     )
-    parser.add_argument("--prompt", help="Send one message and print one reply without entering the REPL.")
+    parser.add_argument(
+        "--prompt",
+        help="Send one message and print one reply without entering the REPL.",
+    )
     parser.add_argument(
         "--save-on-exit",
         action="store_true",
         help="Save the conversation transcript when leaving the chat.",
     )
-    parser.add_argument("--no-banner", action="store_true", help="Do not print the startup banner.")
+    parser.add_argument(
+        "--no-banner", action="store_true", help="Do not print the startup banner."
+    )
     return parser
 
 
@@ -225,9 +287,41 @@ def print_banner() -> None:
 
 def print_help() -> None:
     print("/help  show commands")
+    print("/model switch the active model")
     print("/reset clear conversation history")
     print("/save  save transcript to data/transcripts/")
     print("/exit  leave the chat")
+
+
+def select_model(current_model: str) -> str:
+    """Prompt the user to pick a model by number, defaulting to current_model.
+
+    Returns the selected model name. Falls back to current_model when input is
+    unavailable (non-interactive stdin) or left blank.
+    """
+    models = list_available_chat_models()
+    if current_model not in models:
+        models = [current_model, *models]
+    print("Available models:")
+    for index, name in enumerate(models, start=1):
+        marker = " (current)" if name == current_model else ""
+        print(f"  {index}. {name}{marker}")
+    try:
+        choice = input(
+            f"Select model [1-{len(models)}, enter to keep {current_model}]: "
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return current_model
+    if not choice:
+        return current_model
+    if choice.isdigit():
+        position = int(choice)
+        if 1 <= position <= len(models):
+            return models[position - 1]
+        print(f"Out of range; keeping {current_model}.")
+        return current_model
+    return choice
 
 
 def run_repl(session: ChatSession, save_on_exit: bool) -> None:
@@ -247,6 +341,14 @@ def run_repl(session: ChatSession, save_on_exit: bool) -> None:
             break
         if user_text == "/help":
             print_help()
+            continue
+        if user_text == "/model":
+            selected = select_model(session.model)
+            if selected == session.model:
+                print(f"Model unchanged: {session.model}.")
+            else:
+                session.set_model(selected)
+                print(f"Model switched to {session.model}.")
             continue
         if user_text == "/reset":
             session.reset()
@@ -365,8 +467,11 @@ def main() -> None:
             user_name=args.user_name,
             user_id=args.user_id,
         )
+        selected_model = args.model
+        if not args.prompt and not args.no_select_model and sys.stdin.isatty():
+            selected_model = select_model(args.model)
         session = ChatSession(
-            model=args.model,
+            model=selected_model,
             temperature=args.temperature,
             system_prompt=build_demo_system_prompt(persona_source),
         )

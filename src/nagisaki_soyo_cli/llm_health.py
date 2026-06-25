@@ -145,7 +145,9 @@ def format_llm_health_summary(result: LlmHealthProbeResult) -> str:
         "probe_results:",
     ]
     for record in result.records:
-        summary = record.response_preview or record.error_code or record.error_type or "-"
+        summary = (
+            record.response_preview or record.error_code or record.error_type or "-"
+        )
         lines.append(
             f"- {record.model_name} | {record.status} | available={1 if record.is_available else 0} | http_status={record.http_status or '-'} | {summary}"
         )
@@ -157,7 +159,30 @@ def _list_visible_models(client: OpenAI) -> list[str]:
         models = client.models.list()
     except Exception:
         return []
-    return sorted({model.id for model in models.data if "gpt-4" in model.id or "gpt-5" in model.id})
+    return sorted(
+        {
+            model.id
+            for model in models.data
+            if "gpt-4" in model.id or "gpt-5" in model.id
+        }
+    )
+
+
+def list_available_chat_models() -> list[str]:
+    """Return chat model names for interactive selection.
+
+    Tries the live provider model list first and falls back to the curated
+    default health-probe models when the provider call is unavailable.
+    """
+    if OPENAI_API_KEY:
+        try:
+            client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+            visible = _list_visible_models(client)
+        except Exception:
+            visible = []
+        if visible:
+            return visible
+    return list(DEFAULT_LLM_HEALTH_MODELS)
 
 
 def _probe_one_model(
@@ -177,7 +202,9 @@ def _probe_one_model(
         )
         preview = None
         if getattr(response, "choices", None):
-            preview = (response.choices[0].message.content or "").strip().replace("\n", " ")[:160] or None
+            preview = (response.choices[0].message.content or "").strip().replace(
+                "\n", " "
+            )[:160] or None
         return LlmHealthRecord(
             provider_name=provider_name,
             base_url=OPENAI_BASE_URL,
@@ -221,7 +248,9 @@ def _extract_error_details(exc: Exception) -> tuple[str | None, str | None]:
         if isinstance(error, dict):
             code = error.get("code")
             message = error.get("message")
-            return str(code) if code is not None else None, str(message) if message is not None else str(exc)
+            return str(code) if code is not None else None, (
+                str(message) if message is not None else str(exc)
+            )
     return None, str(exc)
 
 
@@ -266,7 +295,9 @@ def _run_mysql(query: str) -> None:
         env=env,
     )
     if completed.returncode != 0:
-        raise RuntimeError(f"MySQL llm_health persistence failed: {completed.stderr.strip() or 'Unknown MySQL error.'}")
+        raise RuntimeError(
+            f"MySQL llm_health persistence failed: {completed.stderr.strip() or 'Unknown MySQL error.'}"
+        )
 
 
 def _sql_quote(value: str) -> str:

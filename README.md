@@ -32,6 +32,7 @@ uv run nagisaki-soyo-cli llm-health-probe --models gpt-4.1,gpt-5
 ## Chat commands
 
 - `/help` show in-chat commands
+- `/model` list available models and switch the active one
 - `/reset` clear the current conversation history
 - `/save` write the transcript to `data/transcripts/`
 - `/exit` or `/quit` leave the session
@@ -65,6 +66,8 @@ uv run nagisaki-soyo-cli demo-chat \
 ```
 
 The demo chat flow loads the latest persisted `persona_summary`, `agent_strategy`, `prompt_profile`, and confidence data, then builds a mirrored system prompt without claiming to be the real user.
+
+When starting an interactive demo chat session (no `--prompt`), the CLI shows a numbered model picker before the conversation begins. Press Enter to keep `--model` (default `SOYO_MODEL`), or pick another listed model. Use `--no-select-model` to skip the picker, and use the in-chat `/model` command to switch models mid-conversation.
 
 ## Agent profile scaffold
 
